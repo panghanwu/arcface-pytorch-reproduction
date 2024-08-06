@@ -1,2 +1,3 @@
-- [x] Refer to https://github.com/ronghuaiyang/arcface-pytorch/tree/master
-- [ ] Baseline
+- [x] Refer to https://github.com/ronghuaiyang/arcface-pytorch
+- [x] Baseline
+- [ ] Arc margin

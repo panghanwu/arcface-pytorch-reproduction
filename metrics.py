@@ -18,28 +18,21 @@ class ArcFaceHead(nn.Module):
 
 
 class ArcFaceLoss(nn.Module):
-    def __init__(self, margin: float = 0.5, scale: float = 1.0) -> None:
+    def __init__(self, num_classes: int, margin: float = 0.1, scale: float = 1.0) -> None:
         super().__init__()
         self.s = scale
+        self.n_classes = num_classes
         self.cos_m = math.cos(margin)
         self.sin_m = math.sin(margin)
+        self.threshold = math.cos(math.pi - margin)
 
     def forward(self, cosine: Tensor, labels: Tensor) -> Tensor:
-        loss = F.cross_entropy(cosine, labels) 
+        positve = F.one_hot(labels, self.n_classes) == 1
+        above_thrs = cosine > self.threshold
+        use_margin = torch.logical_and(positve, above_thrs)
+
+        sine = torch.sqrt(1.0 - torch.pow(cosine[use_margin], 2))
+        cosine[use_margin] = cosine[use_margin] * self.cos_m - sine * self.sin_m
         
+        loss = F.cross_entropy(self.s * cosine, labels) 
         return loss
-    
-    # def forward(self, cosine: Tensor, labels: Tensor) -> Tensor:
-    #     sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
-    #     cosine_with_margin = cosine * self.cos_m - sine * self.sin_m
-
-    #     # only positive samples have the margin
-    #     one_hot = torch.zeros_like(cosine)
-    #     one_hot.scatter_(dim=1, index=labels.view(-1, 1).long(), value=1)
-        
-    #     output = (one_hot * cosine_with_margin) + ((1 - one_hot) * cosine)
-    #     output *= self.s
-
-    #     loss = F.cross_entropy(output, labels) 
-        
-    #     return loss

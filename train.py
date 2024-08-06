@@ -4,8 +4,7 @@ import cv2
 import matplotlib.pyplot as plt
 import torch
 from torch.nn.functional import normalize
-from torch.optim import SGD
-from torch.optim.lr_scheduler import StepLR
+from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -35,12 +34,12 @@ trainloader = DataLoader(
 
 model = create_mobilenet_large_for_classification(EMBEDDING_DIM).to(device)
 arcface = ArcFaceHead(train_dataset.num_classes, EMBEDDING_DIM).to(device)
-criterion = ArcFaceLoss()
+criterion = ArcFaceLoss(train_dataset.num_classes, margin=0.15)
 
-optimizer = SGD(
+optimizer = Adam(
     [{'params': model.parameters()}, {'params': arcface.parameters()}],
-    lr=0.005, weight_decay=5e-4)
-# scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+    lr=0.005
+)
 
 log_dir = create_log_dir(TITLE)
 
@@ -73,7 +72,6 @@ for epoch_i in range(EPOCH):
         loss: torch.Tensor = criterion(output, labels)
         loss.backward()
         optimizer.step()
-        # scheduler.step()
 
         epoch_loss += loss.item()
         epoch_acc += count_correct(output, labels)
@@ -119,7 +117,7 @@ norm_embeddings = normalize(embeddings, dim=1).detach().cpu()
 norm_centers = normalize(arcface.weight.detach().cpu(), dim=1)
 
 
-cmap = plt.get_cmap('viridis')
+cmap = plt.get_cmap('hsv')
 num_classes = max(labels) + 1 
 
 corrects = torch.tensor(predictions) == torch.tensor(labels)
