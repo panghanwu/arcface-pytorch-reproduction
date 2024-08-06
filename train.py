@@ -114,8 +114,8 @@ with torch.no_grad():
         outputs.append(output)
         predictions.append(torch.argmax(output).item())
 
-embeddings = torch.stack(embeddings)
-norm_embeddings = normalize(embeddings, dim=1)
+embeddings = torch.stack(embeddings).detach().cpu()
+norm_embeddings = normalize(embeddings, dim=1).detach().cpu()
 norm_centers = normalize(arcface.weight.detach().cpu(), dim=1)
 
 
