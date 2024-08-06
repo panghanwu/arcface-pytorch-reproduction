@@ -1,1 +1,2 @@
-Refer to https://github.com/ronghuaiyang/arcface-pytorch/tree/master
+- [x] Refer to https://github.com/ronghuaiyang/arcface-pytorch/tree/master
+- [ ] Baseline

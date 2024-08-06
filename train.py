@@ -1,52 +1,60 @@
 from pathlib import Path
 
+import cv2
+import matplotlib.pyplot as plt
 import torch
-from dataset import Dataset
-from metrics import AddMarginProduct
-from models import resnet_face18
-from torch import nn
+from torch.nn.functional import normalize
 from torch.optim import SGD
 from torch.optim.lr_scheduler import StepLR
-from torch.utils import data
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-NUM_CLASSES: int = 50
-DATASET_DIR: str = 'C:/Users/User/Documents/Project/face_detector_from_scratch/datasets/celeba-recog-50'
+from dataset import FaceRecognitionData
+from metrics import ArcFaceHead, ArcFaceLoss
+from models import create_mobilenet_large_for_classification
+from utils import create_log_dir, set_seed
+
+TITLE: str = 'baseline'
+DATASET_DIR: str = 'datasets/celeba-recog-3'
 BATCH_SIZE: int = 8
 NUM_WORKERS: int = 0
+EMBEDDING_DIM: int = 2
 DEVICE: str = 'cpu'
-EPOCH: int = 100
+EPOCH: int = 10
 
-
+set_seed(66666666)
 device = torch.device(DEVICE)
 data_dir = Path(DATASET_DIR)
-train_dataset = Dataset(data_dir / 'train', phase='train')
-trainloader = data.DataLoader(
+train_dataset = FaceRecognitionData(data_dir / 'train', augmentation=False)
+trainloader = DataLoader(
     train_dataset,
     batch_size=BATCH_SIZE,
     shuffle=True,
     num_workers=NUM_WORKERS
 )
 
-
-criterion = nn.CrossEntropyLoss()
-
-model = resnet_face18()
-
-metric_fc = AddMarginProduct(512, NUM_CLASSES, s=30, m=0.35)
+model = create_mobilenet_large_for_classification(EMBEDDING_DIM).to(device)
+arcface = ArcFaceHead(train_dataset.num_classes, EMBEDDING_DIM).to(device)
+criterion = ArcFaceLoss()
 
 optimizer = SGD(
-    [{'params': model.parameters()}, {'params': metric_fc.parameters()}],
-    lr=0.1, weight_decay=5e-4)
-scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+    [{'params': model.parameters()}, {'params': arcface.parameters()}],
+    lr=0.005, weight_decay=5e-4)
+# scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+
+log_dir = create_log_dir(TITLE)
 
 @torch.no_grad
 def count_correct(output, target) -> int:
     _, predictions = torch.max(output, dim=1)
     return torch.sum(predictions == target).item()
 
+def write_log(filename: str, line: str) -> None:
+    with open(filename, 'a') as file:
+        file.write(line + '\n')
+
+loss_log = []
 for epoch_i in range(EPOCH):
-    scheduler.step()
     model.train()
     epoch_loss = 0.
     epoch_acc = 0.
@@ -57,17 +65,89 @@ for epoch_i in range(EPOCH):
         images = images.to(device)
         labels = labels.to(device).long()
         
+        optimizer.zero_grad()
+
         embedding = model(images)
-        output = metric_fc(embedding, labels)
+        output = arcface(embedding)
 
         loss: torch.Tensor = criterion(output, labels)
-        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        # scheduler.step()
 
         epoch_loss += loss.item()
         epoch_acc += count_correct(output, labels)
-    
-    epoch_loss /= len(train_dataset)
+
+    epoch_loss /= len(trainloader)
+    loss_log.append(epoch_loss)
     epoch_acc /= len(train_dataset)
-    print(f'Epoch {epoch_i} | loss {epoch_loss:.2e} | acc {epoch_acc:.0%}')
+    lr = optimizer.param_groups[0]['lr']
+    info = f'Epoch {epoch_i} | loss {epoch_loss:.2e} | acc {epoch_acc:.0%} | lr {lr:.1e}'
+    write_log(log_dir / 'log.txt', info)
+    print(info)
+
+plt.figure()
+plt.plot(loss_log)
+plt.ylabel('Loss')
+plt.xlabel('Epoch')
+plt.grid(linestyle='--', alpha=0.3)
+plt.savefig(log_dir / 'loss.png')
+plt.close()
+
+# Test
+
+embeddings = []
+outputs = []
+predictions = []
+labels = []
+with torch.no_grad():
+    test_dataset = FaceRecognitionData(data_dir / 'train', augmentation=False)
+    model.eval()
+    for image, label in tqdm(test_dataset, total=len(test_dataset), desc='Test'):
+        image = image.to(device)
+        labels.append(label)
+        
+        embedding = model(image.unsqueeze(0))
+        embeddings.append(embedding.squeeze())
+
+        output = arcface(embedding).squeeze()
+        outputs.append(output)
+        predictions.append(torch.argmax(output).item())
+
+embeddings = torch.stack(embeddings)
+norm_embeddings = normalize(embeddings, dim=1)
+norm_centers = normalize(arcface.weight.detach().cpu(), dim=1)
+
+
+cmap = plt.get_cmap('viridis')
+num_classes = max(labels) + 1 
+
+corrects = torch.tensor(predictions) == torch.tensor(labels)
+acc = torch.sum(corrects).item() / len(corrects)
+
+plt.figure(figsize=(6, 6))
+circle = plt.Circle((0., 0.), 1.0, edgecolor='gray', facecolor='none')
+ax = plt.gca()
+ax.add_patch(circle)
+
+colors = [cmap(i / num_classes) for i in labels]
+plt.scatter(norm_embeddings[:, 0], norm_embeddings[:, 1], c=colors, edgecolors='gray')
+
+colors = [cmap(i / num_classes) for i in range(num_classes)]
+plt.scatter(norm_centers[:, 0], norm_centers[:, 1], c=colors, s=100, edgecolors='gray', marker='*')
+
+plt.grid(linestyle='--', alpha=0.3)
+plt.title(f'Accuracy: {acc:.0%}')
+plt.savefig(log_dir / 'embeddings.png')
+plt.close()
+
+for i in range(test_dataset.num_classes):
+    index = test_dataset.labels.index(i)
+    img = cv2.imread(str((test_dataset.root / 'images') / test_dataset.image_list[index]))
+
+    plt.figure(figsize=(2, 2))
+    plt.imshow(img[..., ::-1])
+    plt.title(i)
+    plt.axis(False)
+    plt.savefig(log_dir / f'face-{i}.png')
+    plt.close()

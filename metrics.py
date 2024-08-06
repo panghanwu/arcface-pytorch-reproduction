@@ -1,37 +1,45 @@
+import math
+
 import torch
 import torch.nn.functional as F
-from torch import nn
+from torch import Tensor, nn
 
-class AddMarginProduct(nn.Module):
-    r"""Implement of large margin cosine distance: :
-    Args:
-        in_features: size of each input sample
-        out_features: size of each output sample
-        s: norm of input feature
-        m: margin
-        cos(theta) - m
-    """
 
-    def __init__(self, in_features, out_features, s=30.0, m=0.40):
-        super(AddMarginProduct, self).__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-        self.s = s
-        self.m = m
-        self.weight = nn.Parameter(torch.FloatTensor(out_features, in_features))
+class ArcFaceHead(nn.Module):
+    def __init__(self, num_classes: int, embedding_dim: int) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(num_classes, embedding_dim))
         nn.init.xavier_uniform_(self.weight)
 
-    def forward(self, input, label):
-        # --------------------------- cos(theta) & phi(theta) ---------------------------
-        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
-        phi = cosine - self.m
-        # --------------------------- convert label to one-hot ---------------------------
-        one_hot = torch.zeros(cosine.size(), device=input.device)
-        # one_hot = one_hot.cuda() if cosine.is_cuda else one_hot
-        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
-        # -------------torch.where(out_i = {x_i if condition_i else y_i) -------------
-        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)  # you can use torch.where if your torch.__version__ is 0.4
-        output *= self.s
-        # print(output)
+    def forward(self, x: Tensor) -> Tensor:
+        x = F.normalize(x, p=2, dim=1)
+        weight = F.normalize(self.weight, p=2, dim=1)
+        return F.linear(x, weight)
 
-        return output
+
+class ArcFaceLoss(nn.Module):
+    def __init__(self, margin: float = 0.5, scale: float = 1.0) -> None:
+        super().__init__()
+        self.s = scale
+        self.cos_m = math.cos(margin)
+        self.sin_m = math.sin(margin)
+
+    def forward(self, cosine: Tensor, labels: Tensor) -> Tensor:
+        loss = F.cross_entropy(cosine, labels) 
+        
+        return loss
+    
+    # def forward(self, cosine: Tensor, labels: Tensor) -> Tensor:
+    #     sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
+    #     cosine_with_margin = cosine * self.cos_m - sine * self.sin_m
+
+    #     # only positive samples have the margin
+    #     one_hot = torch.zeros_like(cosine)
+    #     one_hot.scatter_(dim=1, index=labels.view(-1, 1).long(), value=1)
+        
+    #     output = (one_hot * cosine_with_margin) + ((1 - one_hot) * cosine)
+    #     output *= self.s
+
+    #     loss = F.cross_entropy(output, labels) 
+        
+    #     return loss

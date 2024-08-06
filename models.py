@@ -1,127 +1,210 @@
-from torch import nn
+from collections import OrderedDict
+from dataclasses import dataclass, asdict
+from typing import Literal
+from copy import deepcopy
 
-def conv3x3(in_planes, out_planes, stride=1):
-    """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                     padding=1, bias=False)
+import torch
+from torch import nn, Tensor
+from torchvision.ops import Conv2dNormActivation
 
-class SEBlock(nn.Module):
-    def __init__(self, channel, reduction=16):
-        super(SEBlock, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-                nn.Linear(channel, channel // reduction),
-                nn.PReLU(),
-                nn.Linear(channel // reduction, channel),
-                nn.Sigmoid()
+
+@dataclass
+class MobileNetConfig:
+    in_channels: int
+    expanded_channels: int
+    out_channels: int
+    kernel_size: int
+    stride: int
+    se_ratio: float
+    activation: Literal['ReLU', 'Hardswish']
+
+MOBILENET_LARGE_CONFIG = [
+    MobileNetConfig(16, 16, 16, 3, 1, 0, 'ReLU'), 
+    MobileNetConfig(16, 64, 24, 3, 2, 0, 'ReLU'), 
+    MobileNetConfig(24, 72, 24, 3, 1, 0, 'ReLU'), 
+    MobileNetConfig(24, 72, 40, 5, 2, 0.25, 'ReLU'), 
+    MobileNetConfig(40, 120, 40, 5, 1, 0.25, 'ReLU'), 
+    MobileNetConfig(40, 120, 40, 5, 1, 0.25, 'ReLU'), 
+    MobileNetConfig(40, 240, 80, 3, 2, 0, 'Hardswish'), 
+    MobileNetConfig(80, 200, 80, 3, 1, 0, 'Hardswish'), 
+    MobileNetConfig(80, 184, 80, 3, 1, 0, 'Hardswish'), 
+    MobileNetConfig(80, 184, 80, 3, 1, 0, 'Hardswish'), 
+    MobileNetConfig(80, 480, 112, 3, 1, 0.25, 'Hardswish'), 
+    MobileNetConfig(112, 672, 112, 3, 1, 0.25, 'Hardswish'), 
+    MobileNetConfig(112, 672, 160, 5, 2, 0.25, 'Hardswish'), 
+    MobileNetConfig(160, 960, 160, 5, 1, 0.25, 'Hardswish'), 
+    MobileNetConfig(160, 960, 160, 5, 1, 0.25, 'Hardswish'), 
+]
+
+def make_divisible(num: int, divider: int = 8):
+    return max(num // divider * divider, divider)
+
+
+class SqueezeExcitationBlock(nn.Module):
+    def __init__(self, in_channels: int, squeeze_channels: int) -> None:
+        super().__init__()
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(in_channels, squeeze_channels, 1, bias=False)
+        self.fc2 = nn.Conv2d(squeeze_channels, in_channels, 1, bias=False)
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        w = self.avgpool(x)
+        w = self.fc1(w)
+        w = self.relu(w)
+        w = self.fc2(w)
+        w = self.sigmoid(w)
+        return w * x
+
+
+class MobileNetBlock(nn.Module):
+    """
+    MobileNetV3 block composed of: 
+        (1) Depthwise Separable Convolution
+        (2) Inverted Residual 
+        (3) Squeeze-and-Excitation
+    """
+    def __init__(
+        self,
+        in_channels: int,
+        expanded_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        se_ratio: float,
+        activation: Literal['ReLU', 'Hardswish']
+    ) -> None:
+        super().__init__()
+        self.stride = self.validate_stride(stride)
+        self.use_shortcut = self.stride == 1 and in_channels == out_channels
+        activation = self.get_activation(activation)
+
+        layers: OrderedDict[str, nn.Module] = OrderedDict()
+
+        if expanded_channels != in_channels:
+            layers['pointwise_expansion'] = Conv2dNormActivation(
+                in_channels,
+                expanded_channels,
+                kernel_size=1,
+                norm_layer=nn.BatchNorm2d,
+                activation_layer=activation,
+            )
+        layers['depthwise_conv'] = Conv2dNormActivation(
+            expanded_channels,
+            expanded_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            groups=expanded_channels,
+            norm_layer=nn.BatchNorm2d,
+            activation_layer=activation,
         )
 
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y
+        if se_ratio != 0:
+            squeeze_channels = make_divisible(int(se_ratio*expanded_channels), 8)
+            layers['se_block'] = SqueezeExcitationBlock(expanded_channels, squeeze_channels)
 
-class IRBlock(nn.Module):
-    expansion = 1
+        layers['pointwise_conv'] = Conv2dNormActivation(
+            expanded_channels, 
+            out_channels, 
+            kernel_size=1,
+            norm_layer=nn.BatchNorm2d,
+            activation_layer=None
+        )
+        self.conv = nn.Sequential(layers)
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, use_se=True):
-        super(IRBlock, self).__init__()
-        self.bn0 = nn.BatchNorm2d(inplanes)
-        self.conv1 = conv3x3(inplanes, inplanes)
-        self.bn1 = nn.BatchNorm2d(inplanes)
-        self.prelu = nn.PReLU()
-        self.conv2 = conv3x3(inplanes, planes, stride)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.downsample = downsample
-        self.stride = stride
-        self.use_se = use_se
-        if self.use_se:
-            self.se = SEBlock(planes)
+    @staticmethod
+    def validate_stride(stride: int) -> int:
+        if stride not in (1, 2):
+            raise ValueError(f'stride should be 1 or 2 instead of {stride}')
+        return stride
+    
+    @staticmethod
+    def get_activation(name: Literal['ReLU', 'Hardswish']):
+        match name:
+            case 'ReLU':
+                return nn.ReLU
+            case 'Hardswish':
+                return nn.Hardswish
+            case _:
+                raise ValueError(f'activation should be "ReLU" or "Hardswish" instead of {name}')
 
-    def forward(self, x):
-        residual = x
-        out = self.bn0(x)
-        out = self.conv1(out)
-        out = self.bn1(out)
-        out = self.prelu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-        if self.use_se:
-            out = self.se(out)
-
-        if self.downsample is not None:
-            residual = self.downsample(x)
-
-        out += residual
-        out = self.prelu(out)
-
-        return out
-
-class ResNetFace(nn.Module):
-    def __init__(self, block, layers, use_se=True):
-        self.inplanes = 64
-        self.use_se = use_se
-        super(ResNetFace, self).__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.prelu = nn.PReLU()
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.bn4 = nn.BatchNorm2d(512)
-        self.dropout = nn.Dropout()
-        self.fc5 = nn.Linear(512 * 8 * 8, 512)
-        self.bn5 = nn.BatchNorm1d(512)
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.xavier_normal_(m.weight)
-            elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
-                nn.init.constant_(m.bias, 0)
-
-    def _make_layer(self, block, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, use_se=self.use_se))
-        self.inplanes = planes
-        for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, use_se=self.use_se))
-
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.prelu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.bn4(x)
-        x = self.dropout(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc5(x)
-        x = self.bn5(x)
-
-        return x
+    def forward(self, x: Tensor) -> Tensor:
+        y = self.conv(x)
+        if self.use_shortcut:
+            y += x
+        return y
     
 
-def resnet_face18(use_se=True, **kwargs):
-    model = ResNetFace(IRBlock, [2, 2, 2, 2], use_se=use_se, **kwargs)
-    return model
+class MobileNet(nn.Module):
+    def __init__(self, configs: list[MobileNetConfig], input_channels: int = 3) -> None:
+        super().__init__()
+
+        layers: list[nn.Module] = []
+
+        first_layer = Conv2dNormActivation(
+            input_channels,
+            configs[0].in_channels,
+            kernel_size=3,
+            stride=2,
+            norm_layer=nn.BatchNorm2d,
+            activation_layer=nn.Hardswish
+        )
+        layers.append(first_layer)
+
+        factor = 1
+        for cfg in configs:
+            layers.append(MobileNetBlock(**asdict(cfg)))
+            if cfg.stride == 2:
+                factor += 1
+
+        last_channels = 6 * configs[-1].out_channels
+        last_layer = Conv2dNormActivation(
+            configs[-1].out_channels,
+            last_channels,
+            kernel_size=1,
+            norm_layer=nn.BatchNorm2d,
+            activation_layer=nn.Hardswish
+        )
+        layers.append(last_layer)
+        self.backbone = nn.Sequential(*layers)
+
+        self.input_divider = 2 ** factor
+        self.last_channels = last_channels
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.backbone(x)
+    
+
+class MobileNetForClassification(MobileNet):
+    def __init__(
+        self, 
+        configs: list[MobileNetConfig], 
+        output_dim: int, 
+        input_channels: int = 3,
+        dropout: float = 0.2,
+    ) -> None:
+        super().__init__(configs, input_channels)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.head = nn.Sequential(
+            nn.Linear(self.last_channels, 1280),
+            nn.Hardswish(inplace=True),
+            nn.Dropout(p=dropout, inplace=True),
+            nn.Linear(1280, output_dim)
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.backbone(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.head(x)
+        return x
+
+def create_mobilenet_large_for_classification(num_classes: int, input_channels: int = 3) -> MobileNet:
+    return MobileNetForClassification(MOBILENET_LARGE_CONFIG, num_classes, input_channels)
+
+def create_mobilenet_for_cifar(num_classes: int, dropout: float = 0.1) -> MobileNet:
+    cfgs = deepcopy(MOBILENET_LARGE_CONFIG)
+    cfgs[1].stride = 1
+    cfgs[3].stride = 1
+    return MobileNetForClassification(cfgs, num_classes, dropout=dropout)
