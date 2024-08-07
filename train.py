@@ -19,6 +19,8 @@ DATASET_DIR: str = 'datasets/celeba-recog-3'
 BATCH_SIZE: int = 8
 NUM_WORKERS: int = 0
 EMBEDDING_DIM: int = 2
+MARGIN: int = 0.1
+SCALE: int = 1.0
 DEVICE: str = 'cpu'
 EPOCH: int = 10
 
@@ -35,7 +37,7 @@ trainloader = DataLoader(
 
 model = create_mobilenet_large_for_classification(EMBEDDING_DIM).to(device)
 arcface = ArcFaceHead(train_dataset.num_classes, EMBEDDING_DIM).to(device)
-criterion = ArcFaceLoss(train_dataset.num_classes, margin=0.15)
+criterion = ArcFaceLoss(train_dataset.num_classes, margin=MARGIN, scale=SCALE)
 
 optimizer = Adam(
     [{'params': model.parameters()}, {'params': arcface.parameters()}],
