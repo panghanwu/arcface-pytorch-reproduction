@@ -22,8 +22,7 @@ class ArcFaceLoss(nn.Module):
         super().__init__()
         self.s = scale
         self.n_classes = num_classes
-        self.cos_m = math.cos(margin)
-        self.sin_m = math.sin(margin)
+        self.margin = margin
         self.upper = math.cos(margin)
         self.lower = math.cos(math.pi - margin)
 
@@ -32,8 +31,7 @@ class ArcFaceLoss(nn.Module):
         in_range = torch.logical_and(cosine > self.lower, cosine < self.upper)
         use_margin = torch.logical_and(positve, in_range)
 
-        sine = torch.sqrt(1.0 - torch.pow(cosine[use_margin], 2))
-        cosine[use_margin] = cosine[use_margin] * self.cos_m - sine * self.sin_m
+        cosine[use_margin] = torch.cos(torch.arccos(cosine[use_margin]) + self.margin)
         
         loss = F.cross_entropy(self.s * cosine, labels) 
         return loss
