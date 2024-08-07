@@ -24,18 +24,16 @@ class ArcFaceLoss(nn.Module):
         self.n_classes = num_classes
         self.cos_m = math.cos(margin)
         self.sin_m = math.sin(margin)
-        self.margin = margin
-        self.threshold = math.cos(math.pi - margin)
+        self.upper = math.cos(margin)
+        self.lower = math.cos(math.pi - margin)
 
     def forward(self, cosine: Tensor, labels: Tensor) -> Tensor:
         positve = F.one_hot(labels, self.n_classes) == 1
-        above_thrs = cosine > self.threshold
-        use_margin = torch.logical_and(positve, above_thrs)
+        in_range = torch.logical_and(cosine > self.lower, cosine < self.upper)
+        use_margin = torch.logical_and(positve, in_range)
 
-        cosine[use_margin] = cosine[use_margin] + self.margin
-
-        # sine = torch.sqrt(1.0 - torch.pow(cosine[use_margin], 2))
-        # cosine[use_margin] = cosine[use_margin] * self.cos_m - sine * self.sin_m
+        sine = torch.sqrt(1.0 - torch.pow(cosine[use_margin], 2))
+        cosine[use_margin] = cosine[use_margin] * self.cos_m - sine * self.sin_m
         
         loss = F.cross_entropy(self.s * cosine, labels) 
         return loss
