@@ -1,3 +1,4 @@
 - [x] Refer to https://github.com/ronghuaiyang/arcface-pytorch
 - [x] Baseline
-- [ ] Arc margin
+- [x] Arc margin (failed)
+- [ ] Cos margin

@@ -80,7 +80,7 @@ for epoch_i in range(EPOCH):
     loss_log.append(epoch_loss)
     epoch_acc /= len(train_dataset)
     lr = optimizer.param_groups[0]['lr']
-    info = f'Epoch {epoch_i} | loss {epoch_loss:.2e} | acc {epoch_acc:.0%} | lr {lr:.1e}'
+    info = f'Epoch {epoch_i} | lr {lr:.1e} | loss {epoch_loss:.2e} | acc {epoch_acc:.0%}'
     write_log(log_dir / 'log.txt', info)
     print(info)
 
