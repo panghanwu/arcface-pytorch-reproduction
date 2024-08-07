@@ -13,7 +13,7 @@ from metrics import ArcFaceHead, ArcFaceLoss
 from models import create_mobilenet_large_for_classification
 from utils import create_log_dir, set_seed
 
-TITLE: str = 'arcface'
+TITLE: str = 'cos-margin'
 DATASET_DIR: str = 'datasets/celeba-recog-3'
 BATCH_SIZE: int = 8
 NUM_WORKERS: int = 0
