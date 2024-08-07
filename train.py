@@ -2,8 +2,9 @@ from pathlib import Path
 
 import cv2
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
-from torch.nn.functional import normalize
+from torch.nn.functional import cosine_similarity, normalize
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -38,7 +39,7 @@ criterion = ArcFaceLoss(train_dataset.num_classes, margin=0.15)
 
 optimizer = Adam(
     [{'params': model.parameters()}, {'params': arcface.parameters()}],
-    lr=0.005
+    lr=0.001
 )
 
 log_dir = create_log_dir(TITLE)
@@ -149,3 +150,22 @@ for i in range(test_dataset.num_classes):
     plt.axis(False)
     plt.savefig(log_dir / f'face-{i}.png')
     plt.close()
+
+# Radian matrix
+vectors = norm_centers
+vec_len = len(vectors)
+cos_matrix = torch.full((vec_len, vec_len), fill_value=torch.nan)
+
+for i in range(vec_len):
+    cos_matrix[i:vec_len, i] = cosine_similarity(vectors[i], vectors[i:vec_len])
+
+radian_matrix = torch.arccos(torch.clamp(cos_matrix, min=-1., max=1.))
+
+fig, ax = plt.subplots()
+ax.matshow(radian_matrix)
+plt.title('Radian Matrix')
+for (i, j), z in np.ndenumerate(radian_matrix):
+    ax.text(j, i, f'{z:0.1f}', ha='center', va='center')
+
+plt.savefig(log_dir / f'radian_matrix-{i}.png')
+plt.close()
