@@ -14,15 +14,15 @@ from metrics import ArcFaceHead, ArcFaceLoss
 from models import create_mobilenet_large_for_classification
 from utils import create_log_dir, set_seed
 
-TITLE: str = 'arc-margin-range'
-DATASET_DIR: str = 'datasets/celeba-recog-3'
+TITLE: str = 'emb3-16-interloss'
+DATASET_DIR: str = 'C:/Users/User/Documents/Project/face_detector_from_scratch/datasets/celeba-recog-16'
 BATCH_SIZE: int = 8
 NUM_WORKERS: int = 0
-EMBEDDING_DIM: int = 2
-MARGIN: int = 0.1
+EMBEDDING_DIM: int = 8
+MARGIN: int = 0.01
 SCALE: int = 1.0
 DEVICE: str = 'cpu'
-EPOCH: int = 10
+EPOCH: int = 100
 
 set_seed(66666666)
 device = torch.device(DEVICE)
@@ -72,7 +72,7 @@ for epoch_i in range(EPOCH):
         embedding = model(images)
         output = arcface(embedding)
 
-        loss: torch.Tensor = criterion(output, labels)
+        loss: torch.Tensor = criterion(output, labels) + 1e-2 * arcface.loss()
         loss.backward()
         optimizer.step()
 
@@ -86,6 +86,9 @@ for epoch_i in range(EPOCH):
     info = f'Epoch {epoch_i} | lr {lr:.1e} | loss {epoch_loss:.2e} | acc {epoch_acc:.0%}'
     write_log(log_dir / 'log.txt', info)
     print(info)
+
+ckp = {'mb': model.cpu(), 'arc': arcface.cpu()}
+torch.save(ckp, log_dir / 'checkpoint.pt')
 
 plt.figure()
 plt.plot(loss_log)
@@ -155,11 +158,11 @@ for i in range(test_dataset.num_classes):
 
 # Radian matrix
 vectors = norm_centers
-vec_len = len(vectors)
-cos_matrix = torch.full((vec_len, vec_len), fill_value=torch.nan)
+n_vec = len(vectors)
+cos_matrix = torch.full((n_vec, n_vec), fill_value=torch.nan)
 
-for i in range(vec_len):
-    cos_matrix[i:vec_len, i] = cosine_similarity(vectors[i], vectors[i:vec_len])
+for i in range(n_vec):
+    cos_matrix[i:n_vec, i] = cosine_similarity(vectors[i], vectors[i:n_vec])
 
 radian_matrix = torch.arccos(torch.clamp(cos_matrix, min=-1., max=1.))
 
