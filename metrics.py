@@ -15,6 +15,19 @@ class ArcFaceHead(nn.Module):
         x = F.normalize(x, p=2, dim=1)
         weight = F.normalize(self.weight, p=2, dim=1)
         return F.linear(x, weight)
+    
+    def loss(self) -> Tensor:
+        """
+        Loss to make the space larger between each center
+        """
+        weight = F.normalize(self.weight, p=2, dim=1)
+        n_vec = len(weight)
+        loss = 0.
+        for i in range(n_vec):
+            loss += torch.sum(F.cosine_similarity(weight[i], weight[i+1:]))
+        total_n = n_vec * (n_vec - 1) / 2
+        loss /= total_n
+        return loss
 
 
 class ArcFaceLoss(nn.Module):
