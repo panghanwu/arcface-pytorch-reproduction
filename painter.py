@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def plot_3d_embeddings(embeddings, labels, centers=None, show=True, save_path=None):
+def plot_3d_embeddings(embeddings, labels, centers=None, title=None, show=True, save_path=None):
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
     ax.set_aspect('equal')
@@ -21,6 +21,9 @@ def plot_3d_embeddings(embeddings, labels, centers=None, show=True, save_path=No
     if centers is not None:
         clabels = np.arange(len(centers))
         ax.scatter(centers[:, 0], centers[:, 1], centers[:, 2], c=clabels, cmap='rainbow', marker='*', s=50)
+
+    if title is not None:
+        ax.set_title(title)
 
     if save_path is not None:
         plt.savefig(save_path)

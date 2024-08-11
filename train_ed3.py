@@ -90,14 +90,16 @@ for epoch_i in range(EPOCH):
     norm_centers = normalize(arcface.weight.detach().cpu(), dim=1)
     groundtruth = torch.concatenate(groundtruth)
 
-    plot_3d_embeddings(norm_embeddings, groundtruth, norm_centers, save_path=str((log_dir/'emb')/f'emb-{epoch_i}.png'), show=False)
-
     epoch_loss /= len(trainloader)
     loss_log.append(epoch_loss)
     epoch_acc /= len(train_dataset)
     lr = optimizer.param_groups[0]['lr']
     info = f'Epoch {epoch_i} | lr {lr:.1e} | loss {epoch_loss:.2e} | acc {epoch_acc:.0%}'
     write_log(log_dir / 'log.txt', info)
+    plot_3d_embeddings(norm_embeddings, groundtruth, norm_centers, 
+                       title=f'Accuracy: {epoch_acc:.0%}',
+                       save_path=str((log_dir/'emb')/f'emb-{epoch_i}.png'), 
+                       show=False)
     print(info)
 
 ckp = {'mb': model.cpu(), 'arc': arcface.cpu()}
